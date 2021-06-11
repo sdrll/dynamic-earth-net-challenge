@@ -1,9 +1,10 @@
+## You can directly update with your own path
 dataset:
   semi_supervised_labels_path: '../dataset/semisupervised_labels/Labels'
   planet_boxes_path: '../dataset/planet'
-  planet_test_boxes_path: '/media/HDD1/dataset/ai4eo/planet_test'
-  sentinel_boxes_path: '/media/HDD1/dataset/ai4eo/sentinel-2'
-  sentinel_test_boxes_path: '/media/HDD1/dataset/ai4eo/planet-2_test'
+  planet_test_boxes_path: '../dataset/ai4eo/planet_test'
+  sentinel_boxes_path: '../dataset/ai4eo/sentinel-2'
+  sentinel_test_boxes_path: '../dataset/ai4eo/planet-2_test'
 model-param:
   n_epochs: 10
   batch_size: 40

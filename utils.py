@@ -4,16 +4,16 @@ import os
 from typing import TypedDict
 
 import natsort
-import nptyping
 import numpy as np
 import torch
 import yaml
 from PIL import Image
+from nptyping import NDArray, Int
+from numpy import ndarray
 from numpy.lib.stride_tricks import as_strided
 from skimage import io
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from nptyping import NDArray, Int
 
 
 def load_config(configfile: str = 'config.yml') -> TypedDict:
@@ -28,6 +28,53 @@ def load_config(configfile: str = 'config.yml') -> TypedDict:
         except yaml.YAMLError as exc:
             print(exc)
     return config
+
+
+def read_and_normalized_planet_images_from_cm(cm_label_path: str, planet_boxes_path: str):
+    """
+    Read planet images from matching semi-supervised labels
+    :param cm_label_path: semi-supervised labels file path
+    :param planet_boxes_path: Planet images folder path
+    :return: normalized numpy arrray of original and changed image
+    """
+    parallel_number = cm_label_path.split('_')[0]
+    planet_east_west_folder_name = cm_label_path[4:-20]
+    original_image_name = cm_label_path[-11:-4] + '-01.tif'
+    changed_image_name = cm_label_path[-19:-12] + '-01.tif'
+    original_image_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name,
+                                       'L3H-SR', original_image_name)
+    changed_image_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name,
+                                      'L3H-SR', changed_image_name)
+    I1, I2 = io.imread(original_image_path), io.imread(changed_image_path)
+    new_min = -1
+    new_max = 1
+    I1 = (I1 - np.min(I1)) / (np.max(I1) - np.min(I1)) * (new_max - new_min) + new_min
+    I2 = (I2 - np.min(I2)) / (np.max(I2) - np.min(I2)) * (new_max - new_min) + new_min
+    return I1, I2
+
+
+def mask2rgb(mask: NDArray[Int]) -> ndarray:
+    """
+    Convert numpy mask to rbg thanks to color_label_dict
+    :param mask: Numpy with labels value between 0 and 8
+    :return: numpy array
+    """
+    color_label_dict = {0: (0, 0, 0),
+                        1: (128, 0, 0),
+                        2: (0, 128, 0),
+                        3: (128, 128, 0),
+                        4: (0, 0, 128),
+                        5: (128, 0, 128),
+                        6: (0, 128, 128),
+                        7: (128, 128, 128)}
+
+    maskRGB = np.empty((mask.shape[1], mask.shape[2], 3))
+    mask = np.squeeze(mask)
+    for key in color_label_dict.keys():
+        pixel_value = color_label_dict[key]
+        maskRGB[mask == key] = pixel_value
+
+    return maskRGB.astype(np.uint8)
 
 
 def cut_image_strided(image, new_size):
@@ -59,45 +106,6 @@ def cut_image_strided(image, new_size):
 #     planet_east_west_folder_name = one_location_cm_label_folder_name[4:]
 #     planet_images_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name, 'L3H-SR')
 #     return planet_images_path
-
-
-def read_planet_images_from_cm(cm_label_path: str, planet_boxes_path: str):
-    parallel_number = cm_label_path.split('_')[0]
-    planet_east_west_folder_name = cm_label_path[4:-20]
-    original_image_name = cm_label_path[-11:-4] + '-01.tif'
-    changed_image_name = cm_label_path[-19:-12] + '-01.tif'
-    original_image_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name,
-                                       'L3H-SR', original_image_name)
-    changed_image_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name,
-                                      'L3H-SR', changed_image_name)
-    I1, I2 = io.imread(original_image_path), io.imread(changed_image_path)
-    # I1 = (I1 - I1.mean()) / I1.std()
-    # I2 = (I2 - I2.mean()) / I2.std()
-    new_min = -1
-    new_max = 1
-    I1 = (I1 - np.min(I1)) / (np.max(I1) - np.min(I1)) * (new_max - new_min) + new_min
-    I2 = (I2 - np.min(I2)) / (np.max(I2) - np.min(I2)) * (new_max - new_min) + new_min
-    return I1, I2
-
-
-def mask2rgb(mask: NDArray[Int]):
-    color_label_dict = {0: (0, 0, 0),
-                        1: (128, 0, 0),
-                        2: (0, 128, 0),
-                        3: (128, 128, 0),
-                        4: (0, 0, 128),
-                        5: (128, 0, 128),
-                        6: (0, 128, 128),
-                        7: (128, 128, 128)}
-
-    maskRGB = np.empty((mask.shape[1], mask.shape[2], 3))
-    mask = np.squeeze(mask)
-    for key in color_label_dict.keys():
-        pixel_value = color_label_dict[key]
-        maskRGB[mask == key] = pixel_value
-
-    return maskRGB.astype(np.uint8)
-
 
 class ChangeDetectionDataset(Dataset):
     """Change Detection dataset class, used for both training and test data."""
@@ -139,20 +147,13 @@ class ChangeDetectionDataset(Dataset):
                 for cm_label_file_name in os.listdir(one_location_cm_label_path):
                     cm_label_path = os.path.join(one_location_cm_label_path, cm_label_file_name)
 
-                    I1, I2 = read_planet_images_from_cm(cm_label_file_name, config['dataset']['planet_boxes_path'])
+                    I1, I2 = read_and_normalized_planet_images_from_cm(cm_label_file_name, config['dataset']['planet_boxes_path'])
 
                     cm_rgb_np = np.asarray(Image.open(cm_label_path).convert('RGB'))
                     cm_encoded = self.rgb_to_onehot(cm_rgb_np)
                     cm_indices_np = np.argmax(cm_encoded, axis=2)
-                    n_pix += np.prod(cm_indices_np.shape)
-                    n_pix0 += np.count_nonzero(cm_indices_np == 0)
-                    n_pix1 += np.count_nonzero(cm_indices_np == 1)
-                    n_pix2 += np.count_nonzero(cm_indices_np == 2)
-                    n_pix3 += np.count_nonzero(cm_indices_np == 3)
-                    n_pix4 += np.count_nonzero(cm_indices_np == 4)
-                    n_pix5 += np.count_nonzero(cm_indices_np == 5)
-                    n_pix6 += np.count_nonzero(cm_indices_np == 6)
-                    n_pix7 += np.count_nonzero(cm_indices_np == 7)
+                    n_pix0, n_pix1, n_pix2, n_pix3, n_pix4, n_pix5, n_pix6, n_pix7 = self.compute_for_INS_weights(
+                        cm_indices_np, n_pix, n_pix0, n_pix1, n_pix2, n_pix3, n_pix4, n_pix5, n_pix6, n_pix7)
                     cm_reshape = cm_indices_np.reshape(16, 256, 256)
                     for num_patch in range(0, cm_reshape.shape[0]):
                         self.labels.append(torch.from_numpy(cm_reshape[num_patch]))
@@ -168,14 +169,6 @@ class ChangeDetectionDataset(Dataset):
                                                             *I2_resized.shape[2:])
                     for num_patch in range(0, I2_patches_reshape.shape[0]):
                         self.imgs_2.append(torch.from_numpy(I2_patches_reshape[num_patch]))
-            print(n_pix0 / n_pix)
-            print(n_pix1 / n_pix)
-            print(n_pix2 / n_pix)
-            print(n_pix3 / n_pix)
-            print(n_pix4 / n_pix)
-            print(n_pix5 / n_pix)
-            print(n_pix6 / n_pix)
-            print(n_pix7 / n_pix)
             self.weights = [1 / n_pix0, 1 / n_pix1, 1 / n_pix2, 1 / n_pix3, 1 / n_pix4, 1 / n_pix5, 1 / n_pix6,
                             1 / n_pix7]
         else:
@@ -227,6 +220,7 @@ class ChangeDetectionDataset(Dataset):
         return sample
 
     def rgb_to_onehot(self, rgb_arr):
+        """Convert rgb array to one hot encoded mask"""
         num_classes = len(self.color_label_dict)
         shape = rgb_arr.shape[:2] + (num_classes,)
         arr = np.zeros(shape, dtype=np.int8)
@@ -242,3 +236,19 @@ class ChangeDetectionDataset(Dataset):
             inverse_ohe_img[ys, xs] = ch
         inverse_ohe_img = np.repeat(inverse_ohe_img, 3, axis=2).astype(int)
         return inverse_ohe_img
+
+    def compute_for_INS_weights(self, cm_indices_np, n_pix, n_pix0, n_pix1, n_pix2, n_pix3, n_pix4, n_pix5, n_pix6,
+                                n_pix7):
+        """
+        Compute the pixel number of each class to apply the Inverse of Number of Samples to handle classes imbalances
+        """
+        n_pix += np.prod(cm_indices_np.shape)
+        n_pix0 += np.count_nonzero(cm_indices_np == 0)
+        n_pix1 += np.count_nonzero(cm_indices_np == 1)
+        n_pix2 += np.count_nonzero(cm_indices_np == 2)
+        n_pix3 += np.count_nonzero(cm_indices_np == 3)
+        n_pix4 += np.count_nonzero(cm_indices_np == 4)
+        n_pix5 += np.count_nonzero(cm_indices_np == 5)
+        n_pix6 += np.count_nonzero(cm_indices_np == 6)
+        n_pix7 += np.count_nonzero(cm_indices_np == 7)
+        return n_pix0, n_pix1, n_pix2, n_pix3, n_pix4, n_pix5, n_pix6, n_pix7
