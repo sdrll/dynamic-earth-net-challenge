@@ -9,21 +9,13 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from sklearn.metrics import confusion_matrix
-from siamunet_diff import SiamUnet_diff
-from utils import ChangeDetectionDataset
+from model.siamunet_diff import SiamUnet_diff
+from utils import ChangeDetectionDataset, load_config
 
-semi_supervised_labels_path = '../dataset/semisupervised_labels/Labels'
-save_model_path = 'weights/'
-net, net_name = SiamUnet_diff(4, 8), 'FC-Siam-diff'
-optimizer = torch.optim.Adam(net.parameters(), weight_decay=1e-4)
-scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.95)
-n_epochs = 10
-batch_size = 40
-n_classes = 8
-writer = SummaryWriter()
+config = load_config()
 
 
-def train(train_loader):
+def train(train_loader, n_epochs: int):
     net.cuda()
 
     t = np.linspace(1, n_epochs, n_epochs)
@@ -34,9 +26,7 @@ def train(train_loader):
         tn = 0
         fp = 0
         fn = 0
-        class_correct = list(0. for i in range(n_classes))
-        class_total = list(0. for i in range(n_classes))
-        class_accuracy = list(0. for i in range(n_classes))
+
         tot_loss = 0
         tot_count = 0
         print('Epoch: ' + str(epoch_index + 1) + ' of ' + str(n_epochs))
@@ -58,25 +48,9 @@ def train(train_loader):
             fp += cnf_matrix.sum(axis=0) - np.diag(cnf_matrix)
             fn += cnf_matrix.sum(axis=1) - np.diag(cnf_matrix)
             tp += np.diag(cnf_matrix)
-            print(cnf_matrix)
             tn += cnf_matrix.sum() - (cnf_matrix.sum(axis=0) - np.diag(cnf_matrix) + cnf_matrix.sum(axis=1) - np.diag(
                 cnf_matrix) + np.diag(cnf_matrix))
 
-            # c = (predicted.int() == label.data.int())
-            # for i in range(c.size(1)):
-            #     for j in range(c.size(2)):
-            #         l = int(label.data[0, i, j])
-            #         class_correct[l] += c[0, i, j]
-            #         class_total[l] += 1
-            # print(len(class_correct))
-            # print(len(class_total))
-            # print(c)
-            # pr = (predicted.int() > 0).cpu().numpy()
-            # gt = (label.data.int() > 0).cpu().numpy()
-            # tp += np.logical_and(pr, gt).sum()
-            # tn += np.logical_and(np.logical_not(pr), np.logical_not(gt)).sum()
-            # fp += np.logical_and(pr, np.logical_not(gt)).sum()
-            # fn += np.logical_and(np.logical_not(pr), gt).sum()
         scheduler.step()
 
         net_loss = tot_loss / tot_count
@@ -89,15 +63,22 @@ def train(train_loader):
         writer.add_scalar("Recall/train", rec, epoch_index)
 
 
-train_dataset = ChangeDetectionDataset(semi_supervised_labels_path, transform=None)
+net, net_name = SiamUnet_diff(4, config['model-param']['n_classes']), 'FC-Siam-diff'
+optimizer = torch.optim.Adam(net.parameters(), weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, 0.95)
+writer = SummaryWriter()
+
+train_dataset = ChangeDetectionDataset(config, transform=None)
 weights = torch.FloatTensor(train_dataset.weights).cuda()
 loss_fn = nn.NLLLoss(weight=weights)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=8)
+train_loader = DataLoader(train_dataset, batch_size=config['model-param']['batch_size'], shuffle=True, num_workers=8)
 
 t_start = time.time()
-train(train_loader)
+train(train_loader, config['model-param']['n_epochs'])
 t_end = time.time()
 print('Elapsed time: {}'.format(t_end - t_start))
+
 writer.flush()
 writer.close()
-torch.save(net.state_dict(), save_model_path + '18-05-10epochs_INS')
+
+torch.save(net.state_dict(), config['results']['save_model_path'])

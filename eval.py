@@ -7,7 +7,7 @@ import torch
 from skimage import io
 from tqdm import tqdm
 
-from siamunet_diff import SiamUnet_diff
+from model.siamunet_diff import SiamUnet_diff
 from utils import cut_image_strided
 
 save_model_path = 'weights/'

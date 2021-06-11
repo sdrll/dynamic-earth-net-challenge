@@ -1,29 +1,44 @@
 # PyTorch
 
 import os
+from typing import TypedDict
 
 import natsort
+import nptyping
 import numpy as np
 import torch
+import yaml
 from PIL import Image
 from numpy.lib.stride_tricks import as_strided
 from skimage import io
 from torch.utils.data import Dataset
 from tqdm import tqdm
+from nptyping import NDArray, Int
 
-semi_supervised_labels_path = '../dataset/semisupervised_labels/Labels'
-planet_boxes_path = '../dataset/planet'
-planet_test_boxes_path = '/media/HDD1/dataset/ai4eo/planet_test'
-sentinel_boxes_path = '/media/HDD1/dataset/ai4eo/sentinel-2'
-sentinel_test_boxes_path = '/media/HDD1/dataset/ai4eo/planet-2_test'
+
+def load_config(configfile: str = 'config.yml') -> TypedDict:
+    """
+    Load configuration variable from the configuration file
+    :param configfile: config file path
+    :return: dict with all configurations
+    """
+    with open(configfile, 'r') as stream:
+        try:
+            config = yaml.safe_load(stream)
+        except yaml.YAMLError as exc:
+            print(exc)
+    return config
 
 
 def cut_image_strided(image, new_size):
     """
-
-    :param image:
-    :param new_size:
-    :return:
+    Given a tuple with a new size (s1,s2)
+    Reorders an image of the size (b, y*s1, x*s2) into a new array (y,x,b,s1,s2) where b is the number of bands
+    Example: Image with 10 bands and shape (10, 500, 500) and new_size (100, 100) will be transformed into an array
+    of shape (5, 5, 10, 100, 100)
+    :param image: 3 dimensional numpy array of shape (channels, size_y, size_x)
+    :param new_size: tuple with patch_sizes in form (patch_size_y, patch_size_x)
+    :return: numpy array with 5 dimensions, shape (#patches_y, #patches_x, bands, patch_size_y, patch_size_x)
     """
     bands = image.shape[0]
     new_size_y, new_size_x = new_size
@@ -34,23 +49,19 @@ def cut_image_strided(image, new_size):
     if old_size_x % new_size_x != 0 or old_size_y % new_size_y != 0:
         print("The patch size is not a full multiple of the complete patch size")
 
-    return as_strided(image,
-                      shape=(nr_images_y, nr_images_x, bands, new_size_y, new_size_x),
-                      strides=(image.strides[1] * new_size_y,
-                               image.strides[2] * new_size_x,
-                               image.strides[0],
-                               image.strides[1],
-                               image.strides[2]))
+    return as_strided(image, shape=(nr_images_y, nr_images_x, bands, new_size_y, new_size_x),
+                      strides=(image.strides[1] * new_size_y, image.strides[2] * new_size_x, image.strides[0],
+                               image.strides[1], image.strides[2]))
 
 
-def get_matching_planet_path_image(one_location_cm_label_folder_name):
-    parallel_number = one_location_cm_label_folder_name.split('_')[0]
-    planet_east_west_folder_name = one_location_cm_label_folder_name[4:]
-    planet_images_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name, 'L3H-SR')
-    return planet_images_path
+# def get_matching_planet_path_image(one_location_cm_label_folder_name):
+#     parallel_number = one_location_cm_label_folder_name.split('_')[0]
+#     planet_east_west_folder_name = one_location_cm_label_folder_name[4:]
+#     planet_images_path = os.path.join(planet_boxes_path, parallel_number, planet_east_west_folder_name, 'L3H-SR')
+#     return planet_images_path
 
 
-def read_planet_images_from_cm(cm_label_path: str):
+def read_planet_images_from_cm(cm_label_path: str, planet_boxes_path: str):
     parallel_number = cm_label_path.split('_')[0]
     planet_east_west_folder_name = cm_label_path[4:-20]
     original_image_name = cm_label_path[-11:-4] + '-01.tif'
@@ -69,7 +80,7 @@ def read_planet_images_from_cm(cm_label_path: str):
     return I1, I2
 
 
-def mask2rgb(mask):
+def mask2rgb(mask: NDArray[Int]):
     color_label_dict = {0: (0, 0, 0),
                         1: (128, 0, 0),
                         2: (0, 128, 0),
@@ -91,7 +102,7 @@ def mask2rgb(mask):
 class ChangeDetectionDataset(Dataset):
     """Change Detection dataset class, used for both training and test data."""
 
-    def __init__(self, path, transform=None, train=True):
+    def __init__(self, config, transform=None, train=True):
         # basics
         self.color_label_dict = {0: (0, 0, 0),
                                  1: (128, 0, 0),
@@ -103,7 +114,7 @@ class ChangeDetectionDataset(Dataset):
                                  7: (128, 128, 128)}
 
         self.transform = transform
-        self.path = path
+        self.label_path = config['dataset']['semi_supervised_labels_path']
         self.train = train
 
         # load images
@@ -122,13 +133,13 @@ class ChangeDetectionDataset(Dataset):
         n_pix7 = 0
 
         if train:
-            for one_location_cm_label_folder_name in tqdm(os.listdir(path)):
+            for one_location_cm_label_folder_name in tqdm(os.listdir(self.label_path)):
                 # load and store each image
-                one_location_cm_label_path = os.path.join(path, one_location_cm_label_folder_name)
+                one_location_cm_label_path = os.path.join(self.label_path, one_location_cm_label_folder_name)
                 for cm_label_file_name in os.listdir(one_location_cm_label_path):
                     cm_label_path = os.path.join(one_location_cm_label_path, cm_label_file_name)
 
-                    I1, I2 = read_planet_images_from_cm(cm_label_file_name)
+                    I1, I2 = read_planet_images_from_cm(cm_label_file_name, config['dataset']['planet_boxes_path'])
 
                     cm_rgb_np = np.asarray(Image.open(cm_label_path).convert('RGB'))
                     cm_encoded = self.rgb_to_onehot(cm_rgb_np)
@@ -168,9 +179,9 @@ class ChangeDetectionDataset(Dataset):
             self.weights = [1 / n_pix0, 1 / n_pix1, 1 / n_pix2, 1 / n_pix3, 1 / n_pix4, 1 / n_pix5, 1 / n_pix6,
                             1 / n_pix7]
         else:
-            for planet_test_folder_name in tqdm(os.listdir(path)):
+            for planet_test_folder_name in tqdm(os.listdir(self.label_path)):
                 # load and store each image
-                one_lat_test_path = os.path.join(planet_test_boxes_path, planet_test_folder_name)
+                one_lat_test_path = os.path.join(config['dataset']['planet_test_boxes_path'], planet_test_folder_name)
                 if not os.path.isfile(one_lat_test_path):
                     for one_location_test_folder_name in os.listdir(one_lat_test_path):
                         test_folder_path = os.path.join(one_lat_test_path, one_location_test_folder_name, 'L3H-SR')
