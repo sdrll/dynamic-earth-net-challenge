@@ -16,6 +16,12 @@ config = load_config()
 
 
 def train(train_loader, n_epochs: int):
+    """
+    Main function to train the model
+    :param train_loader: Pytorch dataset loader to load training data
+    :param n_epochs: number of epochs to train
+    :return: none
+    """
     net.cuda()
 
     t = np.linspace(1, n_epochs, n_epochs)
